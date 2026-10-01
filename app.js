@@ -37,6 +37,7 @@ const state = {
   lastDeleted: null,
   pendingUploads: [],
   activeUploadPlan: [],
+  uploadTargetFolder: 'root',
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -55,8 +56,14 @@ const els = {
   filterSettings: $('#filterSettingsButton'), columnSettings: $('#columnSettingsButton'), filterCount: $('#filterCount'),
   emptyFolder: $('#emptyFolderState'), folderDropZone: $('#folderDropZone'),
   directUpload: $('#directUploadInput'),
+  workspaceDropZone: $('#workspaceDropZone'),
   accountButton: $('#accountMenuButton'), accountMenu: $('#accountMenu'),
+  productLogo: $('#productLogoButton'),
 };
+
+let workspaceDragDepth = 0;
+let uploadRunId = 0;
+let uploadTimers = [];
 
 const tones = {
   violet: ['#eeeafd', '#6342d8'], blue: ['#e8f2ff', '#2f73c8'], pink: ['#fdebf2', '#cf4d78'],
@@ -274,7 +281,6 @@ function renderBulk(items) {
   els.bulkActions.innerHTML = isTrash ? `
     <button class="icon-button" data-bulk="restore" aria-label="Восстановить" title="Восстановить"><svg aria-hidden="true"><use href="#icon-undo"></use></svg></button>
     <button class="icon-button danger-icon" data-bulk="deleteForever" aria-label="Удалить навсегда" title="Удалить навсегда"><svg aria-hidden="true"><use href="#icon-trash"></use></svg></button>` : `
-    <button class="icon-button" data-bulk="copyLink" aria-label="Копировать ссылки" title="Копировать ссылки"><svg aria-hidden="true"><use href="#icon-link"></use></svg></button>
     <button class="icon-button" data-bulk="download" aria-label="Скачать" title="Скачать"><svg aria-hidden="true"><use href="#icon-download"></use></svg></button>
     <button class="icon-button" data-bulk="move" aria-label="Переместить" title="Переместить"><svg aria-hidden="true"><use href="#icon-move"></use></svg></button>
     <button class="icon-button danger-icon" data-bulk="delete" aria-label="Удалить" title="Удалить"><svg aria-hidden="true"><use href="#icon-trash"></use></svg></button>`;
@@ -328,7 +334,7 @@ function openItem(item) {
     render();
     return;
   }
-  openDrawer(item);
+  if (item.kind === 'file') openPreview(item);
 }
 
 function setInspectorPreview(item, meta = 'Предпросмотр файла') {
@@ -339,68 +345,69 @@ function setInspectorPreview(item, meta = 'Предпросмотр файла')
   els.inspectorPreview.innerHTML = item.art ? '' : `<svg aria-hidden="true"><use href="#${iconFor(item)}"></use></svg>`;
 }
 
-function openDrawer(item) {
+function showInspector(item, { previewOnly = false, meta = 'Предпросмотр файла' } = {}) {
   state.drawerTarget = item.id;
   state.previewVersionId = null;
-  const name = displayName(item);
   els.drawer.classList.remove('version-history-mode');
-  els.drawerHeaderTitle.textContent = 'Редактирование файла';
-  setInspectorPreview(item);
-  els.drawerContent.innerHTML = `
-    <div class="drawer-copy">
-      <div class="settings-section">
-        <div class="drawer-name-line">
-          <h2>${escapeHtml(name)}</h2>
-          <button class="icon-button favorite-button ${item.favorite ? 'active' : ''}" data-favorite="${item.id}" aria-label="${item.favorite ? 'Убрать из избранного' : 'Добавить в избранное'}"><svg aria-hidden="true"><use href="#icon-star"></use></svg></button>
-        </div>
-      </div>
-      <div class="settings-section">
-        <h3>Основные настройки</h3>
-        <div class="settings-grid">
-          <label class="settings-field">Название<input id="settingsName" value="${escapeHtml(name)}"></label>
-          <label class="settings-field">Описание<textarea id="settingsDescription" placeholder="Добавьте описание файла">${escapeHtml(item.description || '')}</textarea></label>
-          <label class="settings-field">Назначение<select id="settingsPurpose"><option>Публикации</option><option>Внутренние материалы</option><option>Реклама</option><option>Архив</option></select></label>
-          <label class="settings-field">Медиаресурс<select id="settingsResource"><option>SiberPro</option><option>Сайт</option><option>Социальные сети</option><option>Печатные материалы</option></select></label>
-          <label class="settings-field">Статус актива<select id="settingsStatus"><option>В архиве</option><option selected>Активен</option><option>Черновик</option></select></label>
-        </div>
-      </div>
-      <div class="settings-section">
-        <h3>Период действия</h3>
-        <div class="settings-grid two">
-          <label class="settings-field">Начало<input type="date" value="2026-09-25"></label>
-          <label class="settings-field">Окончание<input type="date" value="2027-09-25"></label>
-        </div>
-      </div>
-      <div class="settings-section">
-        <h3>Теги и права</h3>
-        <div class="settings-grid">
-          <label class="settings-field">Теги<span class="tag-input"><span class="tag-chip">бренд</span><span class="tag-chip">2026</span><span class="tag-chip">публикация</span></span></label>
-          <label class="settings-field">Правообладатель<select><option>ООО «Компания»</option><option>Автор материала</option><option>Не указан</option></select></label>
-          <div class="settings-grid two">
-            <label class="settings-field">Права с<input type="date" value="2026-09-25"></label>
-            <label class="settings-field">Права до<input type="date" value="2027-09-25"></label>
-          </div>
-        </div>
-      </div>
-      <div class="settings-section">
-        <h3>Информация о файле</h3>
-        <div class="file-facts">
-          <div class="file-fact"><span>Тип файла</span><strong>${escapeHtml(item.type)}</strong></div>
-          <div class="file-fact"><span>Размер</span><strong>${formatSize(item.size)}</strong></div>
-          ${item.dimensions ? `<div class="file-fact"><span>Разрешение</span><strong>${item.dimensions}</strong></div>` : ''}
-          ${item.duration ? `<div class="file-fact"><span>Длительность</span><strong>${item.duration}</strong></div>` : ''}
-          <div class="file-fact"><span>Дата загрузки</span><strong>${formatDate(item.modified, true)}</strong></div>
-          <div class="file-fact"><span>Автор изменений</span><strong>Юлия Мякишева</strong></div>
-        </div>
-      </div>
-    </div>
-    <div class="sticky-save"><button class="button button-secondary" data-drawer-action="history">История</button><button class="button button-primary" data-drawer-action="save">Сохранить</button></div>`;
+  els.drawer.classList.remove('folder-information');
+  els.drawer.classList.toggle('preview-only', previewOnly);
+  setInspectorPreview(item, meta);
   els.drawer.classList.add('open');
   els.drawer.setAttribute('aria-hidden', 'false');
 }
 
+function openPreview(item) {
+  if (item.kind !== 'file') return;
+  showInspector(item, { previewOnly: true });
+  els.drawerContent.replaceChildren();
+}
+
+function itemLocation(item) {
+  if (item.parent === 'root') return 'Все файлы';
+  return data.find(folder => folder.id === item.parent)?.name || 'Все файлы';
+}
+
+function openInformation(item) {
+  showInspector(item, { meta: item.kind === 'folder' ? 'Информация о папке' : 'Предпросмотр файла' });
+  els.drawer.classList.toggle('folder-information', item.kind === 'folder');
+  els.drawerHeaderTitle.textContent = item.kind === 'folder' ? 'Информация о папке' : 'Информация о файле';
+  const facts = item.kind === 'folder' ? `
+    <div class="file-fact"><span>Тип</span><strong>Папка</strong></div>
+    <div class="file-fact"><span>Содержимое</span><strong>${escapeHtml(secondaryLabel(item))}</strong></div>
+    <div class="file-fact"><span>Размер</span><strong>${escapeHtml(itemSize(item))}</strong></div>` : `
+    <div class="file-fact"><span>Тип файла</span><strong>${escapeHtml(item.type)}</strong></div>
+    <div class="file-fact"><span>Размер</span><strong>${formatSize(item.size)}</strong></div>
+    ${item.dimensions ? `<div class="file-fact"><span>Разрешение</span><strong>${escapeHtml(item.dimensions)}</strong></div>` : ''}
+    ${item.duration ? `<div class="file-fact"><span>Длительность</span><strong>${escapeHtml(item.duration)}</strong></div>` : ''}
+    ${item.pages ? `<div class="file-fact"><span>Страниц</span><strong>${item.pages}</strong></div>` : ''}`;
+  els.drawerContent.innerHTML = `
+    <div class="drawer-copy">
+      <div class="settings-section">
+        <div class="drawer-name-line">
+          <h2>${escapeHtml(item.name)}</h2>
+          <button class="icon-button favorite-button ${item.favorite ? 'active' : ''}" data-favorite="${item.id}" aria-label="${item.favorite ? 'Убрать из избранного' : 'Добавить в избранное'}"><svg aria-hidden="true"><use href="#icon-star"></use></svg></button>
+        </div>
+      </div>
+      <div class="settings-section">
+        <h3>Описание</h3>
+        <p class="information-description">${escapeHtml(item.description || (item.kind === 'folder' ? 'Папка для хранения и организации материалов.' : 'Описание не добавлено.'))}</p>
+      </div>
+      <div class="settings-section">
+        <h3>${item.kind === 'folder' ? 'О папке' : 'О файле'}</h3>
+        <div class="file-facts">
+          ${facts}
+          <div class="file-fact"><span>Расположение</span><strong>${escapeHtml(itemLocation(item))}</strong></div>
+          <div class="file-fact"><span>Дата изменения</span><strong>${formatDate(item.modified, true)}</strong></div>
+          <div class="file-fact"><span>Автор изменений</span><strong>Юлия Мякишева</strong></div>
+        </div>
+      </div>
+    </div>`;
+}
+
 function closeDrawer() {
   els.drawer.classList.remove('open');
+  els.drawer.classList.remove('preview-only');
+  els.drawer.classList.remove('folder-information');
   els.drawer.classList.remove('version-history-mode');
   els.drawer.setAttribute('aria-hidden', 'true');
   state.drawerTarget = null;
@@ -411,15 +418,17 @@ function openMenu(item, button) {
   state.menuTarget = item.id;
   const isTrash = state.section === 'trash';
   els.menu.innerHTML = isTrash ? `
+    <button class="menu-item" data-action="information"><svg><use href="#icon-info"></use></svg>Информация</button>
     <button class="menu-item" data-action="restore"><svg><use href="#icon-undo"></use></svg>Восстановить</button>
     <button class="menu-item danger" data-action="deleteForever"><svg><use href="#icon-trash"></use></svg>Удалить навсегда</button>` : `
     ${item.kind === 'folder' ? `<button class="menu-item" data-action="open"><svg><use href="#icon-folder"></use></svg>Открыть</button>` : ''}
+    <button class="menu-item" data-action="download"><svg><use href="#icon-download"></use></svg>Скачать</button>
     <button class="menu-item" data-action="copyLink"><svg><use href="#icon-link"></use></svg>Копировать ссылку</button>
     <button class="menu-item" data-action="shareAccess"><svg><use href="#icon-users"></use></svg>Поделиться доступом</button>
-    <button class="menu-item" data-action="download"><svg><use href="#icon-download"></use></svg>Скачать</button>
-    ${item.kind === 'folder' ? `<button class="menu-item" data-action="rename"><svg><use href="#icon-file"></use></svg>Переименовать</button>` : ''}
     <button class="menu-item" data-action="move"><svg><use href="#icon-move"></use></svg>Переместить</button>
-    ${item.kind === 'file' ? `<button class="menu-item" data-action="edit"><svg><use href="#icon-file"></use></svg>Редактировать</button><button class="menu-item" data-action="history"><svg><use href="#icon-clock"></use></svg>История версий</button>` : ''}
+    <button class="menu-item" data-action="information"><svg><use href="#icon-info"></use></svg>Информация</button>
+    ${item.kind === 'file' ? `<button class="menu-item" data-action="history"><svg><use href="#icon-clock"></use></svg>История версий</button>` : ''}
+    ${item.kind === 'folder' ? `<button class="menu-item" data-action="rename"><svg><use href="#icon-file"></use></svg>Переименовать</button>` : ''}
     <div class="menu-separator"></div>
     <button class="menu-item danger" data-action="delete"><svg><use href="#icon-trash"></use></svg>Удалить</button>`;
   const rect = button.getBoundingClientRect();
@@ -434,8 +443,9 @@ function openMenu(item, button) {
 
 function closeMenu() { els.menu.hidden = true; state.menuTarget = null; }
 
-function showModal({ title, subtitle = '', body, actions, wide = false }) {
+function showModal({ title, subtitle = '', body, actions, wide = false, auth = false }) {
   els.modal.classList.toggle('modal-wide', wide);
+  els.modal.classList.toggle('modal-auth', auth);
   els.modalTitle.textContent = title;
   els.modalSubtitle.textContent = subtitle;
   els.modalBody.innerHTML = body;
@@ -446,6 +456,34 @@ function showModal({ title, subtitle = '', body, actions, wide = false }) {
 function closeModal() {
   if (els.modal.open) els.modal.close();
   els.modalToastStack.replaceChildren();
+}
+
+function openAllFiles() {
+  closeMenu();
+  state.section = 'library';
+  state.folder = 'root';
+  state.selected.clear();
+  state.search = '';
+  els.search.value = '';
+  closeDrawer();
+  render();
+}
+
+function loginModal() {
+  document.body.classList.add('signed-out');
+  showModal({
+    title: 'Вход в Медиахранилище',
+    subtitle: 'Продолжите с помощью Сбер ID',
+    auth: true,
+    body: `<div class="sber-login">
+      <span class="sber-login-mark" aria-hidden="true">✓</span>
+      <div class="sber-login-copy">
+        <strong>Один аккаунт для удобного входа</strong>
+        <p>Войдите через Сбер ID, чтобы вернуться к файлам и папкам.</p>
+      </div>
+    </div>`,
+    actions: `<button class="sber-id-button" type="button" id="sberIdLogin"><span class="sber-id-button-mark" aria-hidden="true">✓</span><span>Войти по Сбер ID</span></button>`,
+  });
 }
 
 function filterSettingsModal() {
@@ -584,12 +622,19 @@ function processFiles(files) {
   render();
 }
 
-function queueUploadFiles(files, append = false) {
-  if (!files.length) return;
+function queueUploadFiles(files, append = false, autoStart = false) {
+  const validFiles = files.filter(file => file && typeof file.name === 'string' && file.name.trim());
+  const rejectedCount = files.length - validFiles.length;
+  if (rejectedCount) toast(`${rejectedCount} ${plural(rejectedCount, ['объект не удалось добавить', 'объекта не удалось добавить', 'объектов не удалось добавить'])}`, null, null, 'error');
+  if (!validFiles.length) {
+    toast('Не удалось распознать файлы. Попробуйте выбрать их через кнопку «Загрузить»', null, null, 'error');
+    return;
+  }
+  if (!append) state.uploadTargetFolder = state.folder;
   const previous = append ? state.pendingUploads : [];
   const stamp = Date.now();
-  const next = files.map((file, index) => {
-    const duplicate = data.find(item => item.parent === state.folder && item.kind === 'file' && item.name.toLowerCase() === file.name.toLowerCase());
+  const next = validFiles.map((file, index) => {
+    const duplicate = data.find(item => item.parent === state.uploadTargetFolder && item.kind === 'file' && item.name.toLowerCase() === file.name.toLowerCase());
     return {
       id: `${stamp}-${index}`,
       file,
@@ -602,7 +647,8 @@ function queueUploadFiles(files, append = false) {
   });
   state.pendingUploads = [...previous, ...next];
   els.directUpload.value = '';
-  showUploadSelectionModal();
+  if (autoStart && !next.some(item => item.duplicateId)) startUploadProgress();
+  else showUploadSelectionModal();
 }
 
 function uploadActionOptions(selected = 'version') {
@@ -646,24 +692,24 @@ function showUploadSelectionModal() {
   });
 }
 
-function uniqueUploadName(name) {
+function uniqueUploadName(name, folderId = state.uploadTargetFolder) {
   const dot = name.lastIndexOf('.');
   const base = dot > 0 ? name.slice(0, dot) : name;
   const extension = dot > 0 ? name.slice(dot) : '';
   let index = 1;
   let candidate = `${base} (${index})${extension}`;
-  while (data.some(item => item.parent === state.folder && item.name.toLowerCase() === candidate.toLowerCase())) {
+  while (data.some(item => item.parent === folderId && item.name.toLowerCase() === candidate.toLowerCase())) {
     index += 1;
     candidate = `${base} (${index})${extension}`;
   }
   return candidate;
 }
 
-function createUploadedItem(file, name = file.name, index = 0) {
+function createUploadedItem(file, name = file.name, index = 0, folderId = state.uploadTargetFolder) {
   const now = new Date().toISOString();
   return {
     id: Date.now() + index,
-    parent: state.folder,
+    parent: folderId,
     kind: 'file',
     name,
     type: name.split('.').pop().toUpperCase() || 'Файл',
@@ -679,14 +725,17 @@ function createUploadedItem(file, name = file.name, index = 0) {
 function startUploadProgress() {
   const plan = state.pendingUploads.filter(item => item.selected && item.action !== 'skip');
   if (!plan.length) { toast('Выберите хотя бы один файл для загрузки'); return; }
+  clearUploadTimers();
+  const currentRunId = ++uploadRunId;
   state.activeUploadPlan = plan;
   showModal({
-    title: 'Публикация файлов', subtitle: 'Не закрывайте окно до завершения загрузки', wide: true,
+    title: 'Очередь загрузки', subtitle: `${plan.length} ${plural(plan.length, ['файл загружается', 'файла загружаются', 'файлов загружаются'])} в текущую папку`, wide: true,
     body: `<div class="upload-progress-list">${plan.map(item => `<div class="upload-progress-row" data-progress-id="${item.id}">${uploadFileIcon(item.name)}<div class="upload-progress-copy"><strong>${escapeHtml(item.name)}</strong><div class="upload-progress-track"><span style="width:6%"></span></div></div><small class="upload-progress-status">Подготовка</small></div>`).join('')}</div>`,
     actions: `<button class="button button-secondary" value="cancel">Отменить</button>`,
   });
   const steps = [28, 61, 86, 100];
-  steps.forEach((value, stepIndex) => setTimeout(() => {
+  steps.forEach((value, stepIndex) => uploadTimers.push(setTimeout(() => {
+    if (currentRunId !== uploadRunId) return;
     $$('.upload-progress-row').forEach((row, rowIndex) => {
       const adjusted = Math.min(100, Math.max(8, value - rowIndex * 5));
       const bar = $('.upload-progress-track span', row);
@@ -694,34 +743,65 @@ function startUploadProgress() {
       if (bar) bar.style.width = `${adjusted}%`;
       if (status) status.textContent = adjusted === 100 ? 'Готово' : `${adjusted}%`;
     });
-  }, 260 * (stepIndex + 1)));
-  setTimeout(completeUploadPlan, 1400);
+  }, 260 * (stepIndex + 1))));
+  uploadTimers.push(setTimeout(() => completeUploadPlan(currentRunId), 1400));
 }
 
-function completeUploadPlan() {
-  const completed = state.activeUploadPlan.map((item, index) => {
-    if (item.action === 'version' && item.duplicateId) {
-      const existing = findItem(item.duplicateId);
-      if (existing) {
-        const versions = ensureVersions(existing);
-        const now = new Date().toISOString();
-        const uploadedVersion = { id: `${existing.id}-${Date.now()}-${index}`, uploadedAt: now, author: 'Юлия Мякишева', size: item.file.size, type: existing.type };
-        versions.unshift(uploadedVersion);
-        existing.currentVersionId = uploadedVersion.id;
-        existing.modified = now;
-        existing.size = item.file.size;
-        return { ...item, result: 'Новая версия опубликована' };
-      }
-    }
-    const name = item.action === 'separate' ? uniqueUploadName(item.name) : item.name;
-    data.push(createUploadedItem(item.file, name, index));
-    return { ...item, name, result: 'Файл опубликован' };
-  });
-  render();
-  closeModal();
-  toast(`${completed.length} ${plural(completed.length, ['файл загружен', 'файла загружены', 'файлов загружено'])}`);
-  state.pendingUploads = [];
+function clearUploadTimers() {
+  uploadTimers.forEach(timer => clearTimeout(timer));
+  uploadTimers = [];
+}
+
+function showUploadError(message = 'Не удалось завершить загрузку. Попробуйте ещё раз') {
+  clearUploadTimers();
+  uploadRunId += 1;
   state.activeUploadPlan = [];
+  els.modalTitle.textContent = 'Ошибка загрузки';
+  els.modalSubtitle.textContent = message;
+  $$('.upload-progress-row').forEach(row => {
+    const bar = $('.upload-progress-track span', row);
+    const status = $('.upload-progress-status', row);
+    if (bar) bar.style.background = 'var(--danger)';
+    if (status) {
+      status.textContent = 'Ошибка';
+      status.classList.add('error');
+    }
+  });
+  els.modalActions.innerHTML = `<button class="button button-secondary" value="cancel">Закрыть</button><button class="button button-primary" type="button" id="retryUpload">Повторить</button>`;
+  toast(message, null, null, 'error');
+}
+
+function completeUploadPlan(currentRunId) {
+  if (currentRunId !== uploadRunId) return;
+  try {
+    const targetFolder = state.uploadTargetFolder;
+    const completed = state.activeUploadPlan.map((item, index) => {
+      if (item.action === 'version' && item.duplicateId) {
+        const existing = findItem(item.duplicateId);
+        if (existing) {
+          const versions = ensureVersions(existing);
+          const now = new Date().toISOString();
+          const uploadedVersion = { id: `${existing.id}-${Date.now()}-${index}`, uploadedAt: now, author: 'Юлия Мякишева', size: item.file.size, type: existing.type };
+          versions.unshift(uploadedVersion);
+          existing.currentVersionId = uploadedVersion.id;
+          existing.modified = now;
+          existing.size = item.file.size;
+          return { ...item, result: 'Новая версия опубликована' };
+        }
+      }
+      const name = item.action === 'separate' ? uniqueUploadName(item.name, targetFolder) : item.name;
+      data.push(createUploadedItem(item.file, name, index, targetFolder));
+      return { ...item, name, result: 'Файл опубликован' };
+    });
+    clearUploadTimers();
+    state.pendingUploads = [];
+    state.activeUploadPlan = [];
+    render();
+    closeModal();
+    toast(`${completed.length} ${plural(completed.length, ['файл загружен', 'файла загружены', 'файлов загружено'])}`);
+  } catch (error) {
+    showUploadError();
+  }
 }
 
 function duplicateModal(name = 'Главный баннер.jpg') {
@@ -799,6 +879,7 @@ function openVersionHistory(item) {
   state.drawerTarget = item.id;
   ensureVersions(item);
   state.previewVersionId = item.currentVersionId;
+  els.drawer.classList.remove('preview-only');
   els.drawer.classList.add('version-history-mode');
   els.drawerHeaderTitle.textContent = 'История версий';
   renderVersionHistory(item);
@@ -864,10 +945,10 @@ function deleteForever(ids) {
   state.selected.clear(); render(); toast('Объекты удалены навсегда');
 }
 
-function toast(message, actionText, action) {
+function toast(message, actionText, action, variant = 'success') {
   const el = document.createElement('div');
-  el.className = 'toast';
-  el.innerHTML = `<span class="toast-icon"><svg><use href="#icon-check"></use></svg></span><span>${escapeHtml(message)}</span>${actionText ? `<button type="button">${escapeHtml(actionText)}</button>` : ''}`;
+  el.className = `toast ${variant === 'error' ? 'toast-error' : ''}`;
+  el.innerHTML = `<span class="toast-icon"><svg><use href="#${variant === 'error' ? 'icon-close' : 'icon-check'}"></use></svg></span><span>${escapeHtml(message)}</span>${actionText ? `<button type="button">${escapeHtml(actionText)}</button>` : ''}`;
   if (actionText) $('button', el).addEventListener('click', () => { action?.(); el.remove(); });
   (els.modal.open ? els.modalToastStack : $('#toastStack')).append(el);
   setTimeout(() => el.remove(), 4500);
@@ -885,7 +966,8 @@ document.addEventListener('click', event => {
   if (event.target.closest('#logoutButton')) {
     els.accountMenu.hidden = true;
     els.accountButton.setAttribute('aria-expanded', 'false');
-    toast('Выход из аккаунта');
+    closeDrawer();
+    loginModal();
     return;
   }
 
@@ -922,12 +1004,12 @@ document.addEventListener('click', event => {
     const item = findItem(state.menuTarget); const action = actionButton.dataset.action; closeMenu();
     if (!item) return;
     if (action === 'open') openItem(item);
+    if (action === 'information') openInformation(item);
     if (action === 'copyLink') copyItemLink(item);
     if (action === 'shareAccess') accessModal(item);
     if (action === 'rename') renameModal(item);
     if (action === 'move') moveModal([item.id]);
     if (action === 'download') toast(`Скачивание «${displayName(item)}» начато`);
-    if (action === 'edit') openDrawer(item);
     if (action === 'history') openVersionHistory(item);
     if (action === 'delete') confirmDelete([item.id]);
     if (action === 'restore') restoreItems([item.id]);
@@ -939,7 +1021,7 @@ document.addEventListener('click', event => {
   if (sortButton) { const key = sortButton.dataset.sort; state.sortDir = state.sortKey === key && state.sortDir === 'asc' ? 'desc' : 'asc'; state.sortKey = key; render(); return; }
 
   const favorite = event.target.closest('[data-favorite]');
-  if (favorite) { const item = findItem(favorite.dataset.favorite); item.favorite = !item.favorite; openDrawer(item); render(); toast(item.favorite ? 'Добавлено в избранное' : 'Удалено из избранного'); return; }
+  if (favorite) { const item = findItem(favorite.dataset.favorite); item.favorite = !item.favorite; openInformation(item); render(); toast(item.favorite ? 'Добавлено в избранное' : 'Удалено из избранного'); return; }
 
   const previewVersionButton = event.target.closest('[data-preview-version]');
   if (previewVersionButton) {
@@ -953,25 +1035,6 @@ document.addEventListener('click', event => {
   if (makeCurrentButton) {
     const item = findItem(state.drawerTarget); if (!item) return;
     restoreVersion(item, makeCurrentButton.dataset.makeCurrent);
-    return;
-  }
-
-  const drawerAction = event.target.closest('[data-drawer-action]');
-  if (drawerAction) {
-    const item = findItem(state.drawerTarget); if (!item) return;
-    if (drawerAction.dataset.drawerAction === 'history') openVersionHistory(item);
-    if (drawerAction.dataset.drawerAction === 'save') {
-      const newName = $('#settingsName')?.value.trim();
-      if (newName) {
-        const extension = item.kind === 'file' && item.name.includes('.') ? item.name.slice(item.name.lastIndexOf('.')) : '';
-        item.name = `${newName}${extension}`;
-        item.description = $('#settingsDescription')?.value.trim() || '';
-        item.modified = new Date().toISOString();
-        els.inspectorFileName.textContent = newName;
-        render();
-        toast('Настройки файла сохранены');
-      }
-    }
     return;
   }
 
@@ -993,6 +1056,7 @@ els.selectAll.addEventListener('change', () => { visibleItems().forEach(item => 
 $('#clearSelection').addEventListener('click', () => { state.selected.clear(); render(); });
 $('#newFolderButton').addEventListener('click', newFolderModal);
 $('#uploadButton').addEventListener('click', () => els.directUpload.click());
+els.productLogo.addEventListener('click', openAllFiles);
 els.filterSettings.addEventListener('click', filterSettingsModal);
 els.columnSettings.addEventListener('click', columnSettingsModal);
 $('#sectionToggleButton').addEventListener('click', () => {
@@ -1004,12 +1068,34 @@ $('#sectionToggleButton').addEventListener('click', () => {
   render();
 });
 $('#closeDrawer').addEventListener('click', closeDrawer);
+$('#closePreview').addEventListener('click', closeDrawer);
 $('#resetFilters').addEventListener('click', () => { state.search = ''; state.filters.clear(); state.uploadDateMode = 'any'; state.uploadDateFrom = ''; state.uploadDateTo = ''; els.search.value = ''; render(); });
 
-els.modal.addEventListener('close', () => els.modalToastStack.replaceChildren());
+els.modal.addEventListener('close', () => {
+  els.modalToastStack.replaceChildren();
+  if (state.activeUploadPlan.length) {
+    clearUploadTimers();
+    uploadRunId += 1;
+    state.activeUploadPlan = [];
+    toast('Загрузка отменена', null, null, 'error');
+  }
+});
+
+els.modal.addEventListener('cancel', event => {
+  if (els.modal.classList.contains('modal-auth')) event.preventDefault();
+});
 
 els.modal.addEventListener('click', event => {
-  if (event.target === els.modal) closeModal();
+  if (event.target === els.modal && !els.modal.classList.contains('modal-auth')) closeModal();
+  const sberIdLoginButton = event.target.closest('#sberIdLogin');
+  if (sberIdLoginButton) {
+    document.body.classList.remove('signed-out');
+    els.modal.classList.remove('modal-auth');
+    closeModal();
+    openAllFiles();
+    toast('Вход через Сбер ID выполнен');
+    return;
+  }
   const copyAccessButton = event.target.closest('#copyAccessLink');
   if (copyAccessButton) {
     const item = findItem(copyAccessButton.dataset.id); if (item) copyItemLink(item);
@@ -1044,6 +1130,7 @@ els.modal.addEventListener('click', event => {
   }
   if (event.target.closest('#addMoreUploads')) { els.directUpload.click(); return; }
   if (event.target.closest('#continueUpload')) { startUploadProgress(); return; }
+  if (event.target.closest('#retryUpload')) { startUploadProgress(); return; }
   if (event.target.id === 'createFolder') {
     const name = $('#folderName').value.trim();
     if (!name) { $('#folderName').focus(); return; }
@@ -1123,16 +1210,6 @@ els.modal.addEventListener('change', event => {
   }
 });
 
-['dragenter', 'dragover'].forEach(eventName => els.folderDropZone.addEventListener(eventName, event => {
-  event.preventDefault();
-  els.folderDropZone.classList.add('dragging');
-}));
-
-['dragleave', 'drop'].forEach(eventName => els.folderDropZone.addEventListener(eventName, event => {
-  event.preventDefault();
-  els.folderDropZone.classList.remove('dragging');
-}));
-
 els.folderDropZone.addEventListener('click', () => els.directUpload.click());
 els.folderDropZone.addEventListener('keydown', event => {
   if (event.key === 'Enter' || event.key === ' ') {
@@ -1141,11 +1218,60 @@ els.folderDropZone.addEventListener('keydown', event => {
   }
 });
 
-els.folderDropZone.addEventListener('drop', event => {
-  const files = [...event.dataTransfer.files];
-  if (!files.length) return;
-  queueUploadFiles(files);
+function hasDraggedFiles(event) {
+  return [...(event.dataTransfer?.types || [])].includes('Files');
+}
+
+function setWorkspaceDropZone(active) {
+  els.workspaceDropZone.classList.toggle('active', active);
+  els.workspaceDropZone.setAttribute('aria-hidden', String(!active));
+}
+
+function resetWorkspaceDrag() {
+  workspaceDragDepth = 0;
+  setWorkspaceDropZone(false);
+}
+
+document.addEventListener('dragenter', event => {
+  if (!hasDraggedFiles(event)) return;
+  event.preventDefault();
+  workspaceDragDepth += 1;
+  if (state.section === 'library' && !els.modal.open && !state.activeUploadPlan.length) setWorkspaceDropZone(true);
 });
+
+document.addEventListener('dragover', event => {
+  if (!hasDraggedFiles(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = state.section === 'library' && !state.activeUploadPlan.length ? 'copy' : 'none';
+});
+
+document.addEventListener('dragleave', event => {
+  if (!workspaceDragDepth) return;
+  workspaceDragDepth = Math.max(0, workspaceDragDepth - 1);
+  if (workspaceDragDepth === 0) setWorkspaceDropZone(false);
+});
+
+document.addEventListener('drop', event => {
+  if (!hasDraggedFiles(event) && !workspaceDragDepth) return;
+  event.preventDefault();
+  resetWorkspaceDrag();
+  if (state.section !== 'library') {
+    toast('Загрузка доступна только в разделе «Все файлы»', null, null, 'error');
+    return;
+  }
+  if (state.activeUploadPlan.length) {
+    toast('Дождитесь завершения текущей загрузки', null, null, 'error');
+    return;
+  }
+  const append = els.modal.open && !!$('#uploadSelectionList');
+  if (els.modal.open && !append) {
+    toast('Закройте текущее окно перед загрузкой файлов', null, null, 'error');
+    return;
+  }
+  queueUploadFiles([...(event.dataTransfer?.files || [])], append, !append);
+});
+
+window.addEventListener('blur', resetWorkspaceDrag);
 
 els.directUpload.addEventListener('change', event => {
   const append = els.modal.open && !!$('#uploadSelectionList');
